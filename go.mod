@@ -9,7 +9,6 @@ require (
 	github.com/Microsoft/go-winio v0.4.15-0.20200908182639-5b44b70ab3ab // indirect
 	github.com/Microsoft/hcsshim v0.8.6 // indirect
 	github.com/cenkalti/backoff v1.1.1-0.20190506075156-2146c9339422 // indirect
-	github.com/cilium/ebpf v0.0.0-20200110133405-4032b1d8aae3 // indirect
 	github.com/containerd/cgroups v0.0.0-20201119153540-4cbc285b3327
 	github.com/containerd/containerd v1.3.9 // indirect
 	github.com/containerd/continuity v0.0.0-20200928162600-f2cc35102c2a // indirect
@@ -17,7 +16,6 @@ require (
 	github.com/containerd/go-runc v0.0.0-20200220073739-7016d3ce2328 // indirect
 	github.com/containerd/typeurl v0.0.0-20200205145503-b45ef1f1f737 // indirect
 	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf // indirect
-	github.com/coreos/go-systemd/v22 v22.0.0 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.0 // indirect
 	github.com/docker/distribution v2.7.1-0.20190205005809-0d3efadf0154+incompatible // indirect
 	github.com/docker/docker v1.4.2-0.20191028175130-9e7d5ac5ea55 // indirect
@@ -37,7 +35,6 @@ require (
 	github.com/mohae/deepcopy v0.0.0-20170308212314-bb9b5e7adda9 // indirect
 	github.com/opencontainers/image-spec v1.0.1 // indirect
 	github.com/opencontainers/runc v0.1.1 // indirect
-	github.com/opencontainers/runtime-spec v1.0.2-0.20181111125026-1722abf79c2f // indirect
 	github.com/pborman/uuid v1.2.0 // indirect
 	github.com/syndtr/gocapability v0.0.0-20180916011248-d98352740cb2 // indirect
 	github.com/urfave/cli v1.22.2 // indirect

@@ -80,6 +80,10 @@ func (t *Task) contextValue(key interface{}, isTaskGoroutine bool) interface{} {
 		ipcns := t.ipcns
 		ipcns.IncRef()
 		return ipcns
+	case CtxContainerID:
+		return t.containerID
+	case CtxSecurityHooks:
+		return t.k.SecurityHooks
 	case CtxTask:
 		return t
 	case auth.CtxCredentials:

@@ -40,6 +40,12 @@ const (
 
 	// CtxIPCNamespace is a Context.Value key for a IPCNamespace.
 	CtxIPCNamespace
+
+	// CtxContainerID is a Context.Value key for a Task.containerID
+	CtxContainerID
+
+	// CtxSecurityHooks is a Context.Value key for a Kernel.SecurityHooks
+	CtxSecurityHooks
 )
 
 // ContextCanTrace returns true if ctx is permitted to trace t, in the same sense
