@@ -48,6 +48,42 @@ TEST(ChownTest, FchownatBadF) {
   ASSERT_THAT(fchownat(-1, "fff", 0, 0, 0), SyscallFailsWithErrno(EBADF));
 }
 
+TEST(ChownTest, FchownFileWithOpath) {
+  SKIP_IF(IsRunningWithVFS1());
+  auto file = ASSERT_NO_ERRNO_AND_VALUE(TempPath::CreateFile());
+  FileDescriptor fd = ASSERT_NO_ERRNO_AND_VALUE(Open(file.path(), O_PATH));
+
+  ASSERT_THAT(fchown(fd.get(), 0, 0), SyscallFailsWithErrno(EBADF));
+}
+
+TEST(ChownTest, FchownDirWithOpath) {
+  SKIP_IF(IsRunningWithVFS1());
+  const auto dir = ASSERT_NO_ERRNO_AND_VALUE(TempPath::CreateDir());
+  const auto fd =
+      ASSERT_NO_ERRNO_AND_VALUE(Open(dir.path(), O_DIRECTORY | O_PATH));
+
+  ASSERT_THAT(fchown(fd.get(), 0, 0), SyscallFailsWithErrno(EBADF));
+}
+
+TEST(ChownTest, FchownatWithOpath) {
+  SKIP_IF(IsRunningWithVFS1());
+  const auto dir = ASSERT_NO_ERRNO_AND_VALUE(TempPath::CreateDir());
+  auto file = ASSERT_NO_ERRNO_AND_VALUE(TempPath::CreateFileIn(dir.path()));
+  const auto dirfd =
+      ASSERT_NO_ERRNO_AND_VALUE(Open(dir.path(), O_DIRECTORY | O_PATH));
+  ASSERT_THAT(fchownat(dirfd.get(), file.path().c_str(), 0, 0, 0),
+              SyscallSucceeds());
+}
+
+TEST(ChownTest, FchownatEmptyPathWithOpath) {
+  SKIP_IF(IsRunningWithVFS1());
+  const auto dir = ASSERT_NO_ERRNO_AND_VALUE(TempPath::CreateDir());
+  const auto dirfd =
+      ASSERT_NO_ERRNO_AND_VALUE(Open(dir.path(), O_DIRECTORY | O_PATH));
+  ASSERT_THAT(fchownat(dirfd.get(), "", 0, 0, AT_EMPTY_PATH),
+              SyscallFailsWithErrno(EBADF));
+}
+
 TEST(ChownTest, FchownatEmptyPath) {
   const auto dir = ASSERT_NO_ERRNO_AND_VALUE(TempPath::CreateDir());
   const auto fd =

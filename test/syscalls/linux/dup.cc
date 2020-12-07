@@ -18,6 +18,7 @@
 #include "gtest/gtest.h"
 #include "test/util/eventfd_util.h"
 #include "test/util/file_descriptor.h"
+#include "test/util/fs_util.h"
 #include "test/util/posix_error.h"
 #include "test/util/temp_path.h"
 #include "test/util/test_util.h"
@@ -44,14 +45,6 @@ PosixErrorOr<FileDescriptor> Dup3(const FileDescriptor& fd, int target_fd,
   return FileDescriptor(new_fd);
 }
 
-void CheckSameFile(const FileDescriptor& fd1, const FileDescriptor& fd2) {
-  struct stat stat_result1, stat_result2;
-  ASSERT_THAT(fstat(fd1.get(), &stat_result1), SyscallSucceeds());
-  ASSERT_THAT(fstat(fd2.get(), &stat_result2), SyscallSucceeds());
-  EXPECT_EQ(stat_result1.st_dev, stat_result2.st_dev);
-  EXPECT_EQ(stat_result1.st_ino, stat_result2.st_ino);
-}
-
 TEST(DupTest, Dup) {
   auto f = ASSERT_NO_ERRNO_AND_VALUE(TempPath::CreateFile());
   FileDescriptor fd = ASSERT_NO_ERRNO_AND_VALUE(Open(f.path(), O_RDONLY));
@@ -74,6 +67,17 @@ TEST(DupTest, DupClearsCloExec) {
   EXPECT_THAT(fcntl(nfd.get(), F_GETFD), SyscallSucceedsWithValue(0));
 }
 
+TEST(DupTest, DupWithOpath) {
+  SKIP_IF(IsRunningWithVFS1());
+  auto f = ASSERT_NO_ERRNO_AND_VALUE(TempPath::CreateFile());
+  FileDescriptor fd = ASSERT_NO_ERRNO_AND_VALUE(Open(f.path(), O_PATH));
+
+  // Dup the descriptor and make sure it's the same file.
+  FileDescriptor nfd = ASSERT_NO_ERRNO_AND_VALUE(fd.Dup());
+  ASSERT_NE(fd.get(), nfd.get());
+  EXPECT_TRUE(CheckSameFile(fd, nfd));
+}
+
 TEST(DupTest, Dup2) {
   auto f = ASSERT_NO_ERRNO_AND_VALUE(TempPath::CreateFile());
   FileDescriptor fd = ASSERT_NO_ERRNO_AND_VALUE(Open(f.path(), O_RDONLY));
@@ -82,13 +86,13 @@ TEST(DupTest, Dup2) {
   FileDescriptor nfd = ASSERT_NO_ERRNO_AND_VALUE(fd.Dup());
 
   ASSERT_NE(fd.get(), nfd.get());
-  CheckSameFile(fd, nfd);
+  EXPECT_TRUE(CheckSameFile(fd, nfd));
 
   // Dup over the file above.
   int target_fd = nfd.release();
   FileDescriptor nfd2 = ASSERT_NO_ERRNO_AND_VALUE(Dup2(fd, target_fd));
   EXPECT_EQ(target_fd, nfd2.get());
-  CheckSameFile(fd, nfd2);
+  EXPECT_TRUE(CheckSameFile(fd, nfd));
 }
 
 TEST(DupTest, Dup2SameFD) {
@@ -99,6 +103,24 @@ TEST(DupTest, Dup2SameFD) {
   ASSERT_THAT(dup2(fd.get(), fd.get()), SyscallSucceedsWithValue(fd.get()));
 }
 
+TEST(DupTest, Dup2WithOpath) {
+  SKIP_IF(IsRunningWithVFS1());
+  auto f = ASSERT_NO_ERRNO_AND_VALUE(TempPath::CreateFile());
+  FileDescriptor fd = ASSERT_NO_ERRNO_AND_VALUE(Open(f.path(), O_PATH));
+
+  // Regular dup once.
+  FileDescriptor nfd = ASSERT_NO_ERRNO_AND_VALUE(fd.Dup());
+
+  ASSERT_NE(fd.get(), nfd.get());
+  EXPECT_TRUE(CheckSameFile(fd, nfd));
+
+  // Dup over the file above.
+  int target_fd = nfd.release();
+  FileDescriptor nfd2 = ASSERT_NO_ERRNO_AND_VALUE(Dup2(fd, target_fd));
+  EXPECT_EQ(target_fd, nfd2.get());
+  EXPECT_TRUE(CheckSameFile(fd, nfd));
+}
+
 TEST(DupTest, Dup3) {
   auto f = ASSERT_NO_ERRNO_AND_VALUE(TempPath::CreateFile());
   FileDescriptor fd = ASSERT_NO_ERRNO_AND_VALUE(Open(f.path(), O_RDONLY));
@@ -106,16 +128,16 @@ TEST(DupTest, Dup3) {
   // Regular dup once.
   FileDescriptor nfd = ASSERT_NO_ERRNO_AND_VALUE(fd.Dup());
   ASSERT_NE(fd.get(), nfd.get());
-  CheckSameFile(fd, nfd);
+  EXPECT_TRUE(CheckSameFile(fd, nfd));
 
   // Dup over the file above, check that it has no CLOEXEC.
   nfd = ASSERT_NO_ERRNO_AND_VALUE(Dup3(fd, nfd.release(), 0));
-  CheckSameFile(fd, nfd);
+  EXPECT_TRUE(CheckSameFile(fd, nfd));
   EXPECT_THAT(fcntl(nfd.get(), F_GETFD), SyscallSucceedsWithValue(0));
 
   // Dup over the file again, check that it does not CLOEXEC.
   nfd = ASSERT_NO_ERRNO_AND_VALUE(Dup3(fd, nfd.release(), O_CLOEXEC));
-  CheckSameFile(fd, nfd);
+  EXPECT_TRUE(CheckSameFile(fd, nfd));
   EXPECT_THAT(fcntl(nfd.get(), F_GETFD), SyscallSucceedsWithValue(FD_CLOEXEC));
 }
 
@@ -125,6 +147,27 @@ TEST(DupTest, Dup3FailsSameFD) {
 
   // Only dup3 fails if the new and old fd are the same.
   ASSERT_THAT(dup3(fd.get(), fd.get(), 0), SyscallFailsWithErrno(EINVAL));
+}
+
+TEST(DupTest, Dup3WithOpath) {
+  SKIP_IF(IsRunningWithVFS1());
+  auto f = ASSERT_NO_ERRNO_AND_VALUE(TempPath::CreateFile());
+  FileDescriptor fd = ASSERT_NO_ERRNO_AND_VALUE(Open(f.path(), O_PATH));
+
+  // Regular dup once.
+  FileDescriptor nfd = ASSERT_NO_ERRNO_AND_VALUE(fd.Dup());
+  ASSERT_NE(fd.get(), nfd.get());
+  EXPECT_TRUE(CheckSameFile(fd, nfd));
+
+  // Dup over the file above, check that it has no CLOEXEC.
+  nfd = ASSERT_NO_ERRNO_AND_VALUE(Dup3(fd, nfd.release(), 0));
+  EXPECT_TRUE(CheckSameFile(fd, nfd));
+  EXPECT_THAT(fcntl(nfd.get(), F_GETFD), SyscallSucceedsWithValue(0));
+
+  // Dup over the file again, check that it does not CLOEXEC.
+  nfd = ASSERT_NO_ERRNO_AND_VALUE(Dup3(fd, nfd.release(), O_CLOEXEC));
+  EXPECT_TRUE(CheckSameFile(fd, nfd));
+  EXPECT_THAT(fcntl(nfd.get(), F_GETFD), SyscallSucceedsWithValue(FD_CLOEXEC));
 }
 
 }  // namespace
