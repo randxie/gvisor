@@ -827,7 +827,7 @@ func (s *sender) maybeSendSegment(seg *segment, limit int, end seqnum.Value) (se
 				// Consume the segment that we just merged in.
 				s.writeList.Remove(seg.Next())
 			}
-			if !nextTooBig && seg.data.Size() < available {
+			if !nextTooBig && seg.data.Size() < s.maxPayloadSize {
 				// Segment is not full.
 				if s.outstanding > 0 && s.ep.ops.GetDelayOption() {
 					// Nagle's algorithm. From Wikipedia:
@@ -848,7 +848,7 @@ func (s *sender) maybeSendSegment(seg *segment, limit int, end seqnum.Value) (se
 				// send space and MSS.
 				// TODO(gvisor.dev/issue/2833): Drain the held segments after a
 				// timeout.
-				if seg.data.Size() < s.maxPayloadSize && s.ep.ops.GetCorkOption() {
+				if s.ep.ops.GetCorkOption() {
 					return false
 				}
 			}
