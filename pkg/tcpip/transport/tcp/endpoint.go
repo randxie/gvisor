@@ -2023,20 +2023,44 @@ func (e *endpoint) GetSockOptInt(opt tcpip.SockOptInt) (int, *tcpip.Error) {
 	}
 }
 
+func (e *endpoint) getTCPInfo() tcpip.TCPInfoOption {
+	info := tcpip.TCPInfoOption{}
+	e.LockUser()
+	snd := e.snd
+	e.UnlockUser()
+	if snd != nil {
+		// We do not calculate RTT before sending the data packets. If
+		// the connection did not send and receive data, then RTT will
+		// be zero.
+		snd.rtt.Lock()
+		info.RTT = snd.rtt.srtt
+		info.RTTVar = snd.rtt.rttvar
+		snd.rtt.Unlock()
+
+		info.RTO = snd.rto
+
+		// Linux keeps track of TCP_CA_CWR state which is used in case
+		// of ECN. Netstack does not support it.
+		info.CaState = snd.state
+		info.SndSsthresh = uint32(snd.sndSsthresh)
+		info.SndCwnd = uint32(snd.sndCwnd)
+
+		// In netstack reorderSeen is updated only when RACK is enabled.
+		// We only track whether the reordering is seen, which is
+		// different than Linux where reorderSeen is not specific to
+		// RACK and is incremented when a reordering event is seen.
+		if snd.rc.reorderSeen {
+			info.ReorderSeen = 1
+		}
+	}
+	return info
+}
+
 // GetSockOpt implements tcpip.Endpoint.GetSockOpt.
 func (e *endpoint) GetSockOpt(opt tcpip.GettableSocketOption) *tcpip.Error {
 	switch o := opt.(type) {
 	case *tcpip.TCPInfoOption:
-		*o = tcpip.TCPInfoOption{}
-		e.LockUser()
-		snd := e.snd
-		e.UnlockUser()
-		if snd != nil {
-			snd.rtt.Lock()
-			o.RTT = snd.rtt.srtt
-			o.RTTVar = snd.rtt.rttvar
-			snd.rtt.Unlock()
-		}
+		*o = e.getTCPInfo()
 
 	case *tcpip.KeepaliveIdleOption:
 		e.keepalive.Lock()

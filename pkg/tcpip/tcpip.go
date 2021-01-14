@@ -987,12 +987,20 @@ type SettableSocketOption interface {
 	isSettableSocketOption()
 }
 
+// CcState indicates the current congestion control state for TCP sender.
+type CcState int
+
 // TCPInfoOption is used by GetSockOpt to expose TCP statistics.
 //
 // TODO(b/64800844): Add and populate stat fields.
 type TCPInfoOption struct {
-	RTT    time.Duration
-	RTTVar time.Duration
+	RTT         time.Duration
+	RTTVar      time.Duration
+	RTO         time.Duration
+	CaState     CcState
+	SndCwnd     uint32
+	SndSsthresh uint32
+	ReorderSeen uint32
 }
 
 func (*TCPInfoOption) isGettableSocketOption() {}

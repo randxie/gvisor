@@ -1144,6 +1144,22 @@ func getSockOptTCP(t *kernel.Task, s socket.SocketOps, ep commonEndpoint, name, 
 		// TODO(b/64800844): Translate fields once they are added to
 		// tcpip.TCPInfoOption.
 		info := linux.TCPInfo{}
+		switch v.CaState {
+		case tcp.RTORecovery:
+			info.CaState = linux.TCP_CA_Loss
+		case tcp.FastRecovery, tcp.SACKRecovery:
+			info.CaState = linux.TCP_CA_Recovery
+		case tcp.Disorder:
+			info.CaState = linux.TCP_CA_Disorder
+		case tcp.Open:
+			info.CaState = linux.TCP_CA_Open
+		}
+		info.RTO = uint32(v.RTO / time.Microsecond)
+		info.RTT = uint32(v.RTT / time.Microsecond)
+		info.RTTVar = uint32(v.RTTVar / time.Microsecond)
+		info.SndSsthresh = v.SndSsthresh
+		info.SndCwnd = v.SndCwnd
+		info.ReordSeen = v.ReorderSeen
 
 		// Linux truncates the output binary to outLen.
 		buf := t.CopyScratchBuffer(info.SizeBytes())

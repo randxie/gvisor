@@ -277,6 +277,9 @@ ALL_TESTS = [
     PacketimpactTestInfo(
         name = "tcp_rcv_buf_space",
     ),
+    PacketimpactTestInfo(
+        name = "tcp_info",
+    ),
 ]
 
 def validate_all_tests():

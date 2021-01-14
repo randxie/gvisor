@@ -48,13 +48,10 @@ const (
 	MaxRetries = 15
 )
 
-// ccState indicates the current congestion control state for this sender.
-type ccState int
-
 const (
 	// Open indicates that the sender is receiving acks in order and
 	// no loss or dupACK's etc have been detected.
-	Open ccState = iota
+	Open tcpip.CcState = iota
 	// RTORecovery indicates that an RTO has occurred and the sender
 	// has entered an RTO based recovery phase.
 	RTORecovery
@@ -204,7 +201,7 @@ type sender struct {
 	maxSentAck seqnum.Value
 
 	// state is the current state of congestion control for this endpoint.
-	state ccState
+	state tcpip.CcState
 
 	// cc is the congestion control algorithm in use for this sender.
 	cc congestionControl
