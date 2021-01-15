@@ -568,12 +568,6 @@ func (q *streamQueueReceiver) Recv(ctx context.Context, data [][]byte, wantCreds
 	return copied, copied, c, cmTruncated, q.addr, notify, nil
 }
 
-// Release implements Receiver.Release.
-func (q *streamQueueReceiver) Release(ctx context.Context) {
-	q.queueReceiver.Release(ctx)
-	q.control.Release(ctx)
-}
-
 // A ConnectedEndpoint is an Endpoint that can be used to send Messages.
 type ConnectedEndpoint interface {
 	// Passcred implements Endpoint.Passcred.
