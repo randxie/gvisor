@@ -900,8 +900,7 @@ func (p *protocol) returnError(reason icmpReason, pkt *stack.PacketBuffer) *tcpi
 	if mtu > header.IPv6MinimumMTU {
 		mtu = header.IPv6MinimumMTU
 	}
-	headerLen := int(route.MaxHeaderLength()) + header.ICMPv6ErrorHeaderSize
-	available := int(mtu) - headerLen
+	available := mtu - header.IPv6FixedHeaderSize - header.ICMPv6ErrorHeaderSize
 	if available < header.IPv6MinimumSize {
 		return nil
 	}
@@ -915,7 +914,7 @@ func (p *protocol) returnError(reason icmpReason, pkt *stack.PacketBuffer) *tcpi
 	payload.CapLength(payloadLen)
 
 	newPkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
-		ReserveHeaderBytes: headerLen,
+		ReserveHeaderBytes: int(route.MaxHeaderLength()) + header.ICMPv6ErrorHeaderSize,
 		Data:               payload,
 	})
 	newPkt.TransportProtocolNumber = header.ICMPv6ProtocolNumber
