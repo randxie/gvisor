@@ -254,6 +254,7 @@ func (i *Inode) UnstableAttr(ctx context.Context) (UnstableAttr, error) {
 	if i.overlay != nil {
 		return overlayUnstableAttr(ctx, i.overlay)
 	}
+	// panic(fmt.Sprintf("i.InodeOperations has type %T", i.InodeOperations))
 	return i.InodeOperations.UnstableAttr(ctx, i)
 }
 

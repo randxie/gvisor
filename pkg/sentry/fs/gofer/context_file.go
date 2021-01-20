@@ -47,6 +47,7 @@ func (c *contextFile) statFS(ctx context.Context) (p9.FSStat, error) {
 
 func (c *contextFile) getAttr(ctx context.Context, req p9.AttrMask) (p9.QID, p9.AttrMask, p9.Attr, error) {
 	ctx.UninterruptibleSleepStart(false)
+	// panic(fmt.Sprintf("getting attr"))
 	q, m, a, err := c.file.GetAttr(req)
 	ctx.UninterruptibleSleepFinish(false)
 	return q, m, a, err

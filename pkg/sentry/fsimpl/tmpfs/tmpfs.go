@@ -190,11 +190,11 @@ func (fstype FilesystemType) GetFilesystem(ctx context.Context, vfsObj *vfs.Virt
 	var root *dentry
 	switch rootFileType {
 	case linux.S_IFREG:
-		root = fs.newDentry(fs.newRegularFile(rootKUID, rootKGID, rootMode))
+		root = fs.newDentry(fs.newRegularFile(rootKUID, rootKGID, rootMode, nil /* parentDir */))
 	case linux.S_IFLNK:
-		root = fs.newDentry(fs.newSymlink(rootKUID, rootKGID, rootMode, tmpfsOpts.RootSymlinkTarget))
+		root = fs.newDentry(fs.newSymlink(rootKUID, rootKGID, rootMode, tmpfsOpts.RootSymlinkTarget, nil /* parentDir */))
 	case linux.S_IFDIR:
-		root = &fs.newDirectory(rootKUID, rootKGID, rootMode).dentry
+		root = &fs.newDirectory(rootKUID, rootKGID, rootMode, nil /* parentDir */).dentry
 	default:
 		fs.vfsfs.DecRef(ctx)
 		return nil, nil, fmt.Errorf("invalid tmpfs root file type: %#o", rootFileType)
@@ -385,10 +385,19 @@ type inode struct {
 
 const maxLinks = math.MaxUint32
 
-func (i *inode) init(impl interface{}, fs *filesystem, kuid auth.KUID, kgid auth.KGID, mode linux.FileMode) {
+func (i *inode) init(impl interface{}, fs *filesystem, kuid auth.KUID, kgid auth.KGID, mode linux.FileMode, parentDir *directory) {
 	if mode.FileType() == 0 {
 		panic("file type is required in FileMode")
 	}
+
+	// Inherit the group and setgid bit as in fs/inode.c:inode_init_owner().
+	if parentDir != nil && parentDir.inode.mode&linux.S_ISGID == linux.S_ISGID {
+		kgid = auth.KGID(parentDir.inode.gid)
+		if mode&linux.S_IFDIR == linux.S_IFDIR {
+			mode |= linux.S_ISGID
+		}
+	}
+
 	i.fs = fs
 	i.mode = uint32(mode)
 	i.uid = uint32(kuid)
@@ -519,6 +528,7 @@ func (i *inode) setStat(ctx context.Context, creds *auth.Credentials, opts *vfs.
 	if err := vfs.CheckSetStat(ctx, creds, opts, mode, auth.KUID(atomic.LoadUint32(&i.uid)), auth.KGID(atomic.LoadUint32(&i.gid))); err != nil {
 		return err
 	}
+
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	var (
@@ -526,19 +536,6 @@ func (i *inode) setStat(ctx context.Context, creds *auth.Credentials, opts *vfs.
 		needsCtimeBump bool
 	)
 	mask := stat.Mask
-	if mask&linux.STATX_MODE != 0 {
-		ft := atomic.LoadUint32(&i.mode) & linux.S_IFMT
-		atomic.StoreUint32(&i.mode, ft|uint32(stat.Mode&^linux.S_IFMT))
-		needsCtimeBump = true
-	}
-	if mask&linux.STATX_UID != 0 {
-		atomic.StoreUint32(&i.uid, stat.UID)
-		needsCtimeBump = true
-	}
-	if mask&linux.STATX_GID != 0 {
-		atomic.StoreUint32(&i.gid, stat.GID)
-		needsCtimeBump = true
-	}
 	if mask&linux.STATX_SIZE != 0 {
 		switch impl := i.impl.(type) {
 		case *regularFile:
@@ -546,6 +543,8 @@ func (i *inode) setStat(ctx context.Context, creds *auth.Credentials, opts *vfs.
 			if err != nil {
 				return err
 			}
+			stat.Mode = uint16(clearSUIDAndSGID(atomic.LoadUint32(&i.mode)))
+			mask |= linux.STATX_MODE
 			if updated {
 				needsMtimeBump = true
 				needsCtimeBump = true
@@ -555,6 +554,23 @@ func (i *inode) setStat(ctx context.Context, creds *auth.Credentials, opts *vfs.
 		default:
 			return syserror.EINVAL
 		}
+	}
+	if mask&linux.STATX_UID != 0 {
+		atomic.StoreUint32(&i.uid, stat.UID)
+		needsCtimeBump = true
+		stat.Mode = uint16(clearSUIDAndSGID(atomic.LoadUint32(&i.mode)))
+		mask |= linux.STATX_MODE
+	}
+	if mask&linux.STATX_GID != 0 {
+		atomic.StoreUint32(&i.gid, stat.GID)
+		needsCtimeBump = true
+		stat.Mode = uint16(clearSUIDAndSGID(atomic.LoadUint32(&i.mode)))
+		mask |= linux.STATX_MODE
+	}
+	if mask&linux.STATX_MODE != 0 {
+		ft := atomic.LoadUint32(&i.mode) & linux.S_IFMT
+		atomic.StoreUint32(&i.mode, ft|uint32(stat.Mode&^linux.S_IFMT))
+		needsCtimeBump = true
 	}
 	now := i.fs.clock.Now().Nanoseconds()
 	if mask&linux.STATX_ATIME != 0 {
@@ -592,6 +608,21 @@ func (i *inode) setStat(ctx context.Context, creds *auth.Credentials, opts *vfs.
 	}
 
 	return nil
+}
+
+func clearSUIDAndSGID(mode uint32) uint32 {
+	// Directories don't have their bits changed when chown'd.
+	if mode&linux.ModeDirectory == linux.ModeDirectory {
+		return mode
+	}
+
+	// Changing owners always disables the setuid bit. It disables
+	// the setgid bit when the file is executable.
+	mode &= ^uint32(linux.ModeSetUID)
+	if sgid := uint32(linux.ModeSetGID | linux.ModeGroupExec); mode&sgid == sgid {
+		mode &= ^uint32(linux.ModeSetGID)
+	}
+	return mode
 }
 
 // allocatedBlocksForSize returns the number of 512B blocks needed to
