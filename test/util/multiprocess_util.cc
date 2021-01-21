@@ -154,6 +154,9 @@ PosixErrorOr<int> InForkedProcess(const std::function<void()>& fn) {
   pid_t pid = fork();
   if (pid == 0) {
     fn();
+    if (::testing::Test::HasFailure()) {
+      _exit(1);
+    }
     _exit(0);
   }
   MaybeSave();
