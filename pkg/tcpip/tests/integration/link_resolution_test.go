@@ -23,6 +23,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"gvisor.dev/gvisor/pkg/tcpip"
+	"gvisor.dev/gvisor/pkg/tcpip/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip/checker"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/link/pipe"
@@ -32,6 +33,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/icmp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
 )
 
@@ -397,6 +399,11 @@ func TestTCPLinkResolutionFailure(t *testing.T) {
 	}
 }
 
+type linkResolutionResult struct {
+	linkAddr tcpip.LinkAddress
+	ok       bool
+}
+
 func TestGetLinkAddress(t *testing.T) {
 	const (
 		host1NICID = 1
@@ -404,20 +411,34 @@ func TestGetLinkAddress(t *testing.T) {
 	)
 
 	tests := []struct {
-		name             string
-		netProto         tcpip.NetworkProtocolNumber
-		remoteAddr       tcpip.Address
-		expectedLinkAddr bool
+		name       string
+		netProto   tcpip.NetworkProtocolNumber
+		remoteAddr tcpip.Address
+		expectedOk bool
 	}{
 		{
-			name:       "IPv4",
+			name:       "IPv4 resolvable",
 			netProto:   ipv4.ProtocolNumber,
 			remoteAddr: ipv4Addr2.AddressWithPrefix.Address,
+			expectedOk: true,
 		},
 		{
-			name:       "IPv6",
+			name:       "IPv6 resolvable",
 			netProto:   ipv6.ProtocolNumber,
 			remoteAddr: ipv6Addr2.AddressWithPrefix.Address,
+			expectedOk: true,
+		},
+		{
+			name:       "IPv4 not resolvable",
+			netProto:   ipv4.ProtocolNumber,
+			remoteAddr: ipv4Addr3.AddressWithPrefix.Address,
+			expectedOk: false,
+		},
+		{
+			name:       "IPv6 not resolvable",
+			netProto:   ipv6.ProtocolNumber,
+			remoteAddr: ipv6Addr3.AddressWithPrefix.Address,
+			expectedOk: false,
 		},
 	}
 
@@ -432,26 +453,297 @@ func TestGetLinkAddress(t *testing.T) {
 
 					host1Stack, _ := setupStack(t, stackOpts, host1NICID, host2NICID)
 
-					for i := 0; i < 2; i++ {
-						addr, ch, err := host1Stack.GetLinkAddress(host1NICID, test.remoteAddr, "", test.netProto, func(tcpip.LinkAddress, bool) {})
-						var want *tcpip.Error
-						if i == 0 {
-							want = tcpip.ErrWouldBlock
+					ch := make(chan linkResolutionResult, 1)
+					if err := host1Stack.GetLinkAddress(host1NICID, test.remoteAddr, "", test.netProto, func(linkAddr tcpip.LinkAddress, ok bool) {
+						ch <- linkResolutionResult{
+							linkAddr: linkAddr,
+							ok:       ok,
 						}
-						if err != want {
-							t.Fatalf("got host1Stack.GetLinkAddress(%d, %s, '', %d, _) = (%s, _, %s), want = (_, _, %s)", host1NICID, test.remoteAddr, test.netProto, addr, err, want)
-						}
-
-						if i == 0 {
-							<-ch
-							continue
-						}
-
-						if addr != linkAddr2 {
-							t.Fatalf("got addr = %s, want = %s", addr, linkAddr2)
-						}
+					}); err != tcpip.ErrWouldBlock {
+						t.Fatalf("got host1Stack.GetLinkAddress(%d, %s, '', %d, _) = %s, want = %s", host1NICID, test.remoteAddr, test.netProto, err, tcpip.ErrWouldBlock)
+					}
+					wantRes := linkResolutionResult{ok: test.expectedOk}
+					if test.expectedOk {
+						wantRes.linkAddr = linkAddr2
+					}
+					if diff := cmp.Diff(wantRes, <-ch, cmp.AllowUnexported(linkResolutionResult{})); diff != "" {
+						t.Fatalf("link resolution result mismatch (-want +got):\n%s", diff)
 					}
 				})
+			}
+		})
+	}
+}
+
+type routeResolveResult struct {
+	routeInfo stack.RouteInfo
+	success   bool
+}
+
+func TestRouteResolvedFields(t *testing.T) {
+	const (
+		host1NICID = 1
+		host2NICID = 4
+	)
+
+	tests := []struct {
+		name                  string
+		netProto              tcpip.NetworkProtocolNumber
+		localAddr             tcpip.Address
+		remoteAddr            tcpip.Address
+		immediatelyResolvable bool
+		expectedSuccess       bool
+		expectedLinkAddr      tcpip.LinkAddress
+	}{
+		{
+			name:                  "IPv4 immediately resolvable",
+			netProto:              ipv4.ProtocolNumber,
+			localAddr:             ipv4Addr1.AddressWithPrefix.Address,
+			remoteAddr:            header.IPv4AllSystems,
+			immediatelyResolvable: true,
+			expectedSuccess:       true,
+			expectedLinkAddr:      header.EthernetAddressFromMulticastIPv4Address(header.IPv4AllSystems),
+		},
+		{
+			name:                  "IPv6 immediately resolvable",
+			netProto:              ipv6.ProtocolNumber,
+			localAddr:             ipv6Addr1.AddressWithPrefix.Address,
+			remoteAddr:            header.IPv6AllNodesMulticastAddress,
+			immediatelyResolvable: true,
+			expectedSuccess:       true,
+			expectedLinkAddr:      header.EthernetAddressFromMulticastIPv6Address(header.IPv6AllNodesMulticastAddress),
+		},
+		{
+			name:                  "IPv4 resolvable",
+			netProto:              ipv4.ProtocolNumber,
+			localAddr:             ipv4Addr1.AddressWithPrefix.Address,
+			remoteAddr:            ipv4Addr2.AddressWithPrefix.Address,
+			immediatelyResolvable: false,
+			expectedSuccess:       true,
+			expectedLinkAddr:      linkAddr2,
+		},
+		{
+			name:                  "IPv6 resolvable",
+			netProto:              ipv6.ProtocolNumber,
+			localAddr:             ipv6Addr1.AddressWithPrefix.Address,
+			remoteAddr:            ipv6Addr2.AddressWithPrefix.Address,
+			immediatelyResolvable: false,
+			expectedSuccess:       true,
+			expectedLinkAddr:      linkAddr2,
+		},
+		{
+			name:                  "IPv4 not resolvable",
+			netProto:              ipv4.ProtocolNumber,
+			localAddr:             ipv4Addr1.AddressWithPrefix.Address,
+			remoteAddr:            ipv4Addr3.AddressWithPrefix.Address,
+			immediatelyResolvable: false,
+			expectedSuccess:       false,
+		},
+		{
+			name:                  "IPv6 not resolvable",
+			netProto:              ipv6.ProtocolNumber,
+			localAddr:             ipv6Addr1.AddressWithPrefix.Address,
+			remoteAddr:            ipv6Addr3.AddressWithPrefix.Address,
+			immediatelyResolvable: false,
+			expectedSuccess:       false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, useNeighborCache := range []bool{true, false} {
+				t.Run(fmt.Sprintf("UseNeighborCache=%t", useNeighborCache), func(t *testing.T) {
+					stackOpts := stack.Options{
+						NetworkProtocols: []stack.NetworkProtocolFactory{arp.NewProtocol, ipv4.NewProtocol, ipv6.NewProtocol},
+						UseNeighborCache: useNeighborCache,
+					}
+
+					host1Stack, _ := setupStack(t, stackOpts, host1NICID, host2NICID)
+					r, err := host1Stack.FindRoute(host1NICID, "", test.remoteAddr, test.netProto, false /* multicastLoop */)
+					if err != nil {
+						t.Fatalf("host1Stack.FindRoute(%d, '', %s, %d, false): %s", host1NICID, test.remoteAddr, test.netProto, err)
+					}
+					defer r.Release()
+
+					var wantRouteInfo stack.RouteInfo
+					wantRouteInfo.LocalLinkAddress = linkAddr1
+					wantRouteInfo.LocalAddress = test.localAddr
+					wantRouteInfo.RemoteAddress = test.remoteAddr
+					wantRouteInfo.NetProto = test.netProto
+					wantRouteInfo.Loop = stack.PacketOut
+					wantRouteInfo.RemoteLinkAddress = test.expectedLinkAddr
+
+					ch := make(chan routeResolveResult, 1)
+
+					if !test.immediatelyResolvable {
+						wantUnresolvedRouteInfo := wantRouteInfo
+						wantUnresolvedRouteInfo.RemoteLinkAddress = ""
+
+						if routeInfo, _, err := r.ResolvedFields(func(r stack.RouteInfo, success bool) {
+							ch <- routeResolveResult{
+								routeInfo: r,
+								success:   success,
+							}
+						}); err != tcpip.ErrWouldBlock {
+							t.Errorf("got r.ResolvedFields(_) = (%#v, _, %s), want = (_, _, %s)", routeInfo, err, tcpip.ErrWouldBlock)
+						} else if diff := cmp.Diff(wantUnresolvedRouteInfo, routeInfo, cmp.AllowUnexported(stack.RouteInfo{})); diff != "" {
+							t.Errorf("unresolved route info mismatch (-want +got):\n%s", diff)
+						}
+
+						if diff := cmp.Diff(routeResolveResult{routeInfo: wantRouteInfo, success: test.expectedSuccess}, <-ch, cmp.AllowUnexported(routeResolveResult{}, stack.RouteInfo{})); diff != "" {
+							t.Errorf("route resolve result mismatch (-want +got):\n%s", diff)
+						}
+
+						if !test.expectedSuccess {
+							return
+						}
+
+						// At this point the neighbor table should be populated so the route
+						// should be immediately resolvable.
+					}
+
+					if routeInfo, _, err := r.ResolvedFields(func(r stack.RouteInfo, success bool) {
+						ch <- routeResolveResult{
+							routeInfo: r,
+							success:   success,
+						}
+					}); err != nil {
+						t.Errorf("r.ResolvedFields(_): %s", err)
+					} else if diff := cmp.Diff(wantRouteInfo, routeInfo, cmp.AllowUnexported(stack.RouteInfo{})); diff != "" {
+						t.Errorf("route info from resolved route mismatch (-want +got):\n%s", diff)
+					}
+					select {
+					case routeResolveRes := <-ch:
+						if diff := cmp.Diff(routeResolveResult{routeInfo: wantRouteInfo, success: test.expectedSuccess}, routeResolveRes, cmp.AllowUnexported(routeResolveResult{}, stack.RouteInfo{})); diff != "" {
+							t.Errorf("route resolve result from resolved route mismatch (-want +got):\n%s", diff)
+						}
+					default:
+						t.Fatal("expected route to be immediately resolvable")
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestWritePacketsLinkResolution(t *testing.T) {
+	const (
+		host1NICID = 1
+		host2NICID = 4
+	)
+
+	tests := []struct {
+		name             string
+		netProto         tcpip.NetworkProtocolNumber
+		remoteAddr       tcpip.Address
+		expectedWriteErr *tcpip.Error
+	}{
+		{
+			name:             "IPv4",
+			netProto:         ipv4.ProtocolNumber,
+			remoteAddr:       ipv4Addr2.AddressWithPrefix.Address,
+			expectedWriteErr: nil,
+		},
+		{
+			name:             "IPv6",
+			netProto:         ipv6.ProtocolNumber,
+			remoteAddr:       ipv6Addr2.AddressWithPrefix.Address,
+			expectedWriteErr: nil,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stackOpts := stack.Options{
+				NetworkProtocols:   []stack.NetworkProtocolFactory{arp.NewProtocol, ipv4.NewProtocol, ipv6.NewProtocol},
+				TransportProtocols: []stack.TransportProtocolFactory{udp.NewProtocol},
+			}
+
+			host1Stack, host2Stack := setupStack(t, stackOpts, host1NICID, host2NICID)
+
+			var serverWQ waiter.Queue
+			serverWE, serverCH := waiter.NewChannelEntry(nil)
+			serverWQ.EventRegister(&serverWE, waiter.EventIn)
+			serverEP, err := host2Stack.NewEndpoint(udp.ProtocolNumber, test.netProto, &serverWQ)
+			if err != nil {
+				t.Fatalf("host2Stack.NewEndpoint(%d, %d, _): %s", udp.ProtocolNumber, test.netProto, err)
+			}
+			defer serverEP.Close()
+
+			serverAddr := tcpip.FullAddress{Port: 1234}
+			if err := serverEP.Bind(serverAddr); err != nil {
+				t.Fatalf("serverEP.Bind(%#v): %s", serverAddr, err)
+			}
+
+			r, err := host1Stack.FindRoute(host1NICID, "", test.remoteAddr, test.netProto, false /* multicastLoop */)
+			if err != nil {
+				t.Fatalf("host1Stack.FindRoute(%d, '', %s, %d, false): %s", host1NICID, test.remoteAddr, test.netProto, err)
+			}
+			defer r.Release()
+
+			data := []byte{1, 2}
+			var pkts stack.PacketBufferList
+			for _, d := range data {
+				pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
+					ReserveHeaderBytes: header.UDPMinimumSize + int(r.MaxHeaderLength()),
+					Data:               buffer.View([]byte{d}).ToVectorisedView(),
+				})
+				pkt.TransportProtocolNumber = udp.ProtocolNumber
+				length := uint16(pkt.Size())
+				udpHdr := header.UDP(pkt.TransportHeader().Push(header.UDPMinimumSize))
+				udpHdr.Encode(&header.UDPFields{
+					SrcPort: 5555,
+					DstPort: serverAddr.Port,
+					Length:  length,
+				})
+				xsum := r.PseudoHeaderChecksum(udp.ProtocolNumber, length)
+				for _, v := range pkt.Data.Views() {
+					xsum = header.Checksum(v, xsum)
+				}
+				udpHdr.SetChecksum(^udpHdr.CalculateChecksum(xsum))
+
+				pkts.PushBack(pkt)
+			}
+
+			params := stack.NetworkHeaderParams{
+				Protocol: udp.ProtocolNumber,
+				TTL:      64,
+				TOS:      stack.DefaultTOS,
+			}
+
+			if n, err := r.WritePackets(nil /* gso */, pkts, params); err != nil {
+				t.Fatalf("r.WritePackets(nil, %#v, _): %s", params, err)
+			} else if want := pkts.Len(); want != n {
+				t.Fatalf("got r.WritePackets(nil, %#v, _) = %d, want = %d", n, params, want)
+			}
+
+			var writer bytes.Buffer
+			count := 0
+			for {
+				var rOpts tcpip.ReadOptions
+				res, err := serverEP.Read(&writer, rOpts)
+				if err != nil {
+					if err == tcpip.ErrWouldBlock {
+						// Should not have anymore bytes to read after we read the sent
+						// number of bytes.
+						if count == len(data) {
+							break
+						}
+
+						<-serverCH
+						continue
+					}
+
+					t.Fatalf("serverEP.Read(_, %#v): %s", rOpts, err)
+				}
+				count += res.Count
+			}
+
+			if got, want := host2Stack.Stats().UDP.PacketsReceived.Value(), uint64(len(data)); got != want {
+				t.Errorf("got host2Stack.Stats().UDP.PacketsReceived.Value() = %d, want = %d", got, want)
+			}
+			if diff := cmp.Diff(data, writer.Bytes()); diff != "" {
+				t.Errorf("read bytes mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
